@@ -8,8 +8,8 @@ from torch import cuda
 
 from svp.common import utils
 from svp.common.train import create_loaders
-from svp.cifar.datasets import create_dataset
-from svp.cifar.train import create_model_and_optimizer
+from svp.amazon.datasets import create_dataset
+from svp.amazon.train import create_model_and_optimizer
 from svp.common.selection import select
 from svp.common.active import (generate_models,
                                check_different_models,
@@ -20,24 +20,30 @@ from svp.common.active import (generate_models,
 
 def active(run_dir: str = './run',
 
-           datasets_dir: str = './data', dataset: str = 'cifar10',
-           augmentation: bool = True,
+           datasets_dir: str = './data',
+           dataset: str = 'amazon_review_polarity',
            validation: int = 0, shuffle: bool = True,
 
-           arch: str = 'preact20', optimizer: str = 'sgd',
-           epochs: Tuple[int, ...] = (1, 90, 45, 45),
-           learning_rates: Tuple[float, ...] = (0.01, 0.1, 0.01, 0.001),
-           momentum: float = 0.9, weight_decay: float = 5e-4,
+           arch: str = 'vdcnn9-maxpool', optimizer: str = 'sgd',
+           epochs: Tuple[int, ...] = (3, 3, 3, 3, 3),
+           learning_rates: Tuple[float, ...] = (
+               0.01, 0.005, 0.0025, 0.00125, 0.000625
+           ),
+           momentum: float = 0.9, weight_decay: float = 1e-4,
            batch_size: int = 128, eval_batch_size: int = 128,
 
            proxy_arch: str = 'preact20', proxy_optimizer: str = 'sgd',
-           proxy_epochs: Tuple[int, ...] = (1, 90, 45, 45),
-           proxy_learning_rates: Tuple[float, ...] = (0.01, 0.1, 0.01, 0.001),
-           proxy_momentum: float = 0.9, proxy_weight_decay: float = 5e-4,
+           proxy_epochs: Tuple[int, ...] = (3, 3, 3, 3, 3),
+           proxy_learning_rates: Tuple[float, ...] = (
+               0.01, 0.005, 0.0025, 0.00125, 0.000625
+           ),
+           proxy_momentum: float = 0.9, proxy_weight_decay: float = 1e-4,
            proxy_batch_size: int = 128, proxy_eval_batch_size: int = 128,
 
-           initial_subset: int = 1_000,
-           rounds: Tuple[int, ...] = (4_000, 5_000, 5_000, 5_000, 5_000),
+           initial_subset: int = 72_000,
+           rounds: Tuple[int, ...] = (
+               288_000, 360_000, 360_000, 360_000, 360_000
+           ),
            selection_method: str = 'least_confidence',
            precomputed_selection: Optional[str] = None,
            train_target: bool = True,
@@ -50,7 +56,7 @@ def active(run_dir: str = './run',
            seed: Optional[int] = None, checkpoint: str = 'best',
            track_test_acc: bool = True):
     """
-    Perform active learning on CIFAR10 and CIFAR100.
+    Perform active learning on Amazon Review Polarity and Full.
 
     If the model architectures (`arch` vs `proxy_arch`) or the learning rate
     schedules don't match, "selection via proxy" (SVP) is performed and two
@@ -69,58 +75,59 @@ def active(run_dir: str = './run',
         Path to log results and other artifacts.
     datasets_dir : str, default './data'
         Path to datasets.
-    dataset : str, default 'cifar10'
-        Dataset to use in experiment (i.e., CIFAR10 or CIFAR100)
-    augmentation : bool, default True
-        Add data augmentation (i.e., random crop and horizontal flip).
+    dataset : str, default 'amazon_review_polarity'
+        Dataset to use in experiment (e.g., amazon_review_full)
     validation : int, default 0
         Number of examples from training set to use for valdiation.
     shuffle : bool, default True
         Shuffle training data before splitting into training and validation.
-    arch : str, default 'preact20'
-        Model architecture for the target model. `preact20` is short for
-        ResNet20 w/ Pre-Activation.
+    arch : str, default 'vdcnn9-maxpool'
+        Model architecture for the target model. `vdcnn9-maxpool` is short for
+        VDCNN9 with max pooling (see https://arxiv.org/abs/1606.01781).
     optimizer : str, default = 'sgd'
         Optimizer for training the target model.
-    epochs : Tuple[int, ...], default (1, 90, 45, 45)
+    epochs : Tuple[int, ...], default (3, 3, 3, 3, 3)
         Epochs for training the target model. Each number corresponds to a
         learning rate below.
-    learning_rates : Tuple[float, ...], default (0.01, 0.1, 0.01, 0.001)
+    learning_rates : Tuple[float, ...], default (
+            0.01, 0.005, 0.0025, 0.00125, 0.000625)
         Learning rates for training the target model. Each learning rate is
         used for the corresponding number of epochs above.
     momentum : float, default 0.9
         Momentum for SGD with the target model.
-    weight_decay : float, default 5e-4
+    weight_decay : float, default 1e-4
         Weight decay for SGD with the target model.
     batch_size : int, default 128
         Minibatch size for training the target model.
     eval_batch_size : int, default 128
         Minibatch size for evaluation (validation and testing) of the target
         model.
-    proxy_arch : str, default 'preact20'
-        Model architecture for the proxy model. `preact20` is short for
-        ResNet20 w/ Pre-Activation.
+    proxy_arch : str, default 'vdcnn9-maxpool'
+        Model architecture for the proxy model. `vdcnn9-maxpool` is short for
+        VDCNN9 with max pooling (see https://arxiv.org/abs/1606.01781).
     proxy_optimizer : str, default = 'sgd'
         Optimizer for training the proxy model.
-    proxy_epochs : Tuple[int, ...], default (1, 90, 45, 45)
+    proxy_epochs : Tuple[int, ...], default (3, 3, 3, 3, 3)
         Epochs for training the proxy model. Each number corresponds to a
         learning rate below.
-    proxy_learning_rates : Tuple[float, ...], default (0.01, 0.1, 0.01, 0.001)
+    proxy_learning_rates : Tuple[float, ...], default (
+            0.01, 0.005, 0.0025, 0.00125, 0.000625)
         Learning rates for training the proxy model. Each learning rate is
         used for the corresponding number of epochs above.
     proxy_momentum : float, default 0.9
         Momentum for SGD with the proxy model.
-    proxy_weight_decay : float, default 5e-4
+    proxy_weight_decay : float, default 1e-4
         Weight decay for SGD with the proxy model.
     proxy_batch_size : int, default 128
         Minibatch size for training the proxy model.
     proxy_eval_batch_size : int, default 128
-        Minibatch size for evaluation (validation and testing) of the model
-        proxy.
-    initial_subset : int, default 1,000
+        Minibatch size for evaluation (validation and testing) of the proxy
+        model.
+    initial_subset : int, default 72,000
         Number of randomly selected training examples to use for the initial
         labeled set.
-    rounds : Tuple[int, ...], default (4,000, 5,000, 5,000, 5,000, 5,000)
+    rounds : Tuple[int, ...], default (
+            288,000, 360,000, 360,000, 360,000, 360,000)
         Number of unlabeled exampels to select in a round of labeling.
     selection_method : str, default least_confidence
         Criteria for selecting unlabeled examples to label.
@@ -164,8 +171,7 @@ def active(run_dir: str = './run',
             cuda=cuda, device_ids=device_ids, num_workers=num_workers)
 
     # Create the training dataset.
-    train_dataset = create_dataset(dataset, datasets_dir, train=True,
-                                   augmentation=augmentation)
+    train_dataset = create_dataset(dataset, datasets_dir, train=True)
     # Verify there is enough training data for validation,
     #   the initial subset, and the selection rounds.
     validate_splits(train_dataset, validation, initial_subset, rounds)
@@ -173,12 +179,11 @@ def active(run_dir: str = './run',
     # Create the test dataset.
     test_dataset = None
     if track_test_acc:
-        test_dataset = create_dataset(dataset, datasets_dir, train=False,
-                                      augmentation=False)
+        test_dataset = create_dataset(dataset, datasets_dir, train=False)
 
-    # Calculate the number of classes (e.g., 10 or 100) so the model has
+    # Calculate the number of classes (e.g., 2 or 5) so the model has
     #   the right dimension for its output.
-    num_classes = len(set(train_dataset.targets))  # type: ignore
+    num_classes = train_dataset.classes
 
     # Split the training dataset between training and validation.
     unlabeled_pool, dev_indices = utils.split_indices(

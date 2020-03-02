@@ -49,7 +49,7 @@ For example, traditional active learning would use the same model (e.g., [ResNet
 
 ```bash
 # Active learning with ResNet164 for both selection and the final predictions.
-python -m svp.cifar.active --dataset cifar10 --num-workers 4 \
+python -m svp.cifar active --dataset cifar10 --num-workers 4 \
 	--proxy-arch preact164 --arch preact164 \
 	--selection-method least_confidence \
 	--initial-subset 1000 \
@@ -65,7 +65,7 @@ Using the idea of selection via proxy (SVP), we could use a less accurate but mu
 
 ```bash
 # Active learning with ResNet20 for selection and ResNet164 for the final predictions.
-python -m svp.cifar.active --dataset cifar10 --num-workers 4 \
+python -m svp.cifar active --dataset cifar10 --num-workers 4 \
 	--proxy-arch preact20 --arch preact164 \
 	--selection-method least_confidence \
 	--initial-subset 1000 \
@@ -84,7 +84,7 @@ If we can tolerate a slight increase in final error, we can achieve even greater
 
 ```bash
 # Active learning with ResNet20 after only 50 epochs for selection.
-python -m svp.cifar.active --dataset cifar10 --num-workers 4 \
+python -m svp.cifar active --dataset cifar10 --num-workers 4 \
 	--proxy-arch preact20 --arch preact164 \
 	--proxy-learning-rate 0.01 --proxy-epochs 1 \
 	--proxy-learning-rate 0.1 --proxy-epochs 45 \

@@ -6,21 +6,23 @@ from torch import nn, optim
 from torch.optim import Optimizer  # type: ignore
 
 from svp.common import utils
-from svp.cifar.models import MODELS
-from svp.cifar.datasets import create_dataset
 from svp.common.train import run_training, create_loaders
+from svp.amazon.models import MODELS
+from svp.amazon.datasets import create_dataset
 
 
 def train(run_dir: str = './run',
 
-          datasets_dir: str = './data', dataset: str = 'cifar10',
-          augmentation: bool = True,
+          datasets_dir: str = './data',
+          dataset: str = 'amazon_review_polarity',
           validation: int = 0, shuffle: bool = True,
 
-          arch: str = 'preact20', optimizer: str = 'sgd',
-          epochs: Tuple[int, ...] = (1, 90, 45, 45),
-          learning_rates: Tuple[float, ...] = (0.01, 0.1, 0.01, 0.001),
-          momentum: float = 0.9, weight_decay: float = 5e-4,
+          arch: str = 'vdcnn9-maxpool', optimizer: str = 'sgd',
+          epochs: Tuple[int, ...] = (3, 3, 3, 3, 3),
+          learning_rates: Tuple[float, ...] = (
+              0.01, 0.005, 0.0025, 0.00125, 0.000625
+          ),
+          momentum: float = 0.9, weight_decay: float = 1e-4,
           batch_size: int = 128, eval_batch_size: int = 128,
 
           cuda: bool = True,
@@ -30,7 +32,7 @@ def train(run_dir: str = './run',
           seed: Optional[int] = None, checkpoint: str = 'best',
           track_test_acc: bool = True):
     """
-    Train deep learning models (e.g., ResNet) on CIFAR10 and CIFAR100.
+    Train deep learning models (e.g., VDCNN) on Amaon Review Polarity and Full.
 
     Parameters
     ----------
@@ -38,26 +40,26 @@ def train(run_dir: str = './run',
         Path to log results and other artifacts.
     datasets_dir : str, default './data'
         Path to datasets.
-    dataset : str, default 'cifar10'
-        Dataset to use in experiment (i.e., CIFAR10 or CIFAR100)
-    augmentation : bool, default True
-        Add data augmentation (i.e., random crop and horizontal flip).
+    dataset : str, default 'amazon_review_polarity'
+        Dataset to use in experiment (e.g., amazon_review_full)
     validation : int, default 0
         Number of examples from training set to use for valdiation.
     shuffle : bool, default True
         Shuffle training data before splitting into training and validation.
-    arch : str, default 'preact20'
-        Model architecture. `preact20` is short for ResNet20 w/ Pre-Activation.
+    arch : str, default 'vdcnn9-maxpool'
+        Model architecture. `vdcnn9-maxpool` is short for VDCNN9 with max
+        pooling (see https://arxiv.org/abs/1606.01781).
     optimizer : str, default = 'sgd'
         Optimizer for training.
-    epochs : Tuple[int, ...], default (1, 90, 45, 45)
+    epochs : Tuple[int, ...], default (3, 3, 3, 3, 3)
         Epochs for training. Each number corresponds to a learning rate below.
-    learning_rates : Tuple[float, ...], default (0.01, 0.1, 0.01, 0.001)
+    learning_rates : Tuple[float, ...], default (
+            0.01, 0.005, 0.0025, 0.00125, 0.000625)
         Learning rates for training. Each learning rate is used for the
         corresponding number of epochs above.
     momentum : float, default 0.9
         Momentum for SGD.
-    weight_decay : float, default 5e-4
+    weight_decay : float, default 1e-4
         Weight decay for SGD.
     batch_size : int, default 128
         Minibatch size for training.
@@ -104,13 +106,12 @@ def train(run_dir: str = './run',
             cuda=cuda, device_ids=device_ids, num_workers=num_workers)
 
     # Create the training dataset.
-    train_dataset = create_dataset(dataset, datasets_dir, train=True,
-                                   augmentation=augmentation)
+    train_dataset = create_dataset(dataset, datasets_dir, train=True)
+
     # Create the test dataset.
     test_dataset = None
     if track_test_acc:
-        test_dataset = create_dataset(dataset, datasets_dir, train=False,
-                                      augmentation=False)
+        test_dataset = create_dataset(dataset, datasets_dir, train=False)
 
     # Create data loaders
     train_loader, dev_loader, test_loader = create_loaders(
@@ -125,9 +126,9 @@ def train(run_dir: str = './run',
         num_workers=num_workers,
         eval_num_workers=eval_num_workers)
 
-    # Calculate the number of classes (e.g., 10 or 100) so the model has
+    # Calculate the number of classes (e.g., 2 or 5) so the model has
     #   the right dimension for its output.
-    num_classes = len(set(train_dataset.targets))  # type: ignore
+    num_classes = train_dataset.classes
 
     # Create the model and optimizer for training.
     model, _optimizer = create_model_and_optimizer(
@@ -170,7 +171,7 @@ def create_model_and_optimizer(arch: str, num_classes: int, optimizer: str,
                                run_dir: Optional[str] = None
                                ) -> Tuple[nn.Module, Optimizer]:
     '''
-    Create the model and optimizer for the CIFAR10 and CIFAR100 datasets.
+    Create the model and optimizer for Amazon datasets.
 
     Parameters
     ----------

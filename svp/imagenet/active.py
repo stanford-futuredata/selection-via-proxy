@@ -8,8 +8,8 @@ from torch import cuda
 
 from svp.common import utils
 from svp.common.train import create_loaders
-from svp.cifar.datasets import create_dataset
-from svp.cifar.train import create_model_and_optimizer
+from svp.imagenet.datasets import create_dataset
+from svp.imagenet.train import create_model_and_optimizer, _LabelSmoothing
 from svp.common.selection import select
 from svp.common.active import (generate_models,
                                check_different_models,
@@ -20,24 +20,34 @@ from svp.common.active import (generate_models,
 
 def active(run_dir: str = './run',
 
-           datasets_dir: str = './data', dataset: str = 'cifar10',
+           datasets_dir: str = './data', dataset: str = 'imagenet',
            augmentation: bool = True,
            validation: int = 0, shuffle: bool = True,
 
-           arch: str = 'preact20', optimizer: str = 'sgd',
-           epochs: Tuple[int, ...] = (1, 90, 45, 45),
-           learning_rates: Tuple[float, ...] = (0.01, 0.1, 0.01, 0.001),
-           momentum: float = 0.9, weight_decay: float = 5e-4,
-           batch_size: int = 128, eval_batch_size: int = 128,
 
-           proxy_arch: str = 'preact20', proxy_optimizer: str = 'sgd',
-           proxy_epochs: Tuple[int, ...] = (1, 90, 45, 45),
-           proxy_learning_rates: Tuple[float, ...] = (0.01, 0.1, 0.01, 0.001),
-           proxy_momentum: float = 0.9, proxy_weight_decay: float = 5e-4,
-           proxy_batch_size: int = 128, proxy_eval_batch_size: int = 128,
+           arch: str = 'resnet18', optimizer: str = 'sgd',
+           epochs: Tuple[int, ...] = (1, 1, 1, 1, 1, 25, 30, 20, 20),
+           learning_rates: Tuple[float, ...] = (
+              0.0167, 0.0333, 0.05, 0.0667, 0.0833,  0.1, 0.01, 0.001, 0.0001),
+           scale_learning_rates: bool = True,
+           momentum: float = 0.9, weight_decay: float = 1e-4,
+           batch_size: int = 256, eval_batch_size: int = 256,
+           fp16: bool = False, label_smoothing: float = 0.1,
+           loss_scale: float = 256.0,
 
-           initial_subset: int = 1_000,
-           rounds: Tuple[int, ...] = (4_000, 5_000, 5_000, 5_000, 5_000),
+           proxy_arch: str = 'resnet18', proxy_optimizer: str = 'sgd',
+           proxy_epochs: Tuple[int, ...] = (1, 1, 1, 1, 1, 25, 30, 20, 20),
+           proxy_learning_rates: Tuple[float, ...] = (
+              0.0167, 0.0333, 0.05, 0.0667, 0.0833,  0.1, 0.01, 0.001, 0.0001),
+           proxy_scale_learning_rates: bool = True,
+           proxy_momentum: float = 0.9, proxy_weight_decay: float = 1e-4,
+           proxy_batch_size: int = 256, proxy_eval_batch_size: int = 256,
+           proxy_fp16: bool = False, proxy_label_smoothing: float = 0.1,
+           proxy_loss_scale: float = 256.0,
+
+           initial_subset: int = 25_623,
+           rounds: Tuple[int, ...] = (
+               102_493, 128_117, 128_117, 128_117, 128_117),
            selection_method: str = 'least_confidence',
            precomputed_selection: Optional[str] = None,
            train_target: bool = True,
@@ -50,7 +60,7 @@ def active(run_dir: str = './run',
            seed: Optional[int] = None, checkpoint: str = 'best',
            track_test_acc: bool = True):
     """
-    Perform active learning on CIFAR10 and CIFAR100.
+    Perform active learning on ImageNet.
 
     If the model architectures (`arch` vs `proxy_arch`) or the learning rate
     schedules don't match, "selection via proxy" (SVP) is performed and two
@@ -69,58 +79,81 @@ def active(run_dir: str = './run',
         Path to log results and other artifacts.
     datasets_dir : str, default './data'
         Path to datasets.
-    dataset : str, default 'cifar10'
-        Dataset to use in experiment (i.e., CIFAR10 or CIFAR100)
+    dataset : str, default 'imagenet'
+        Dataset to use in experiment (unnecessary but kept for consistency)
     augmentation : bool, default True
         Add data augmentation (i.e., random crop and horizontal flip).
     validation : int, default 0
         Number of examples from training set to use for valdiation.
     shuffle : bool, default True
         Shuffle training data before splitting into training and validation.
-    arch : str, default 'preact20'
-        Model architecture for the target model. `preact20` is short for
-        ResNet20 w/ Pre-Activation.
+    arch : str, default 'resnet18'
+        Model architecture for the target model. `resnet18` is short for
+        ResNet18. Other models are pulled from `torchvision.models`.
     optimizer : str, default = 'sgd'
         Optimizer for training the target model.
-    epochs : Tuple[int, ...], default (1, 90, 45, 45)
+    epochs : Tuple[int, ...], default (1, 1, 1, 1, 1, 25, 30, 20, 20)
         Epochs for training the target model. Each number corresponds to a
         learning rate below.
-    learning_rates : Tuple[float, ...], default (0.01, 0.1, 0.01, 0.001)
+    learning_rates : Tuple[float, ...], default (
+            0.0167, 0.0333, 0.05, 0.0667, 0.0833,  0.1, 0.01, 0.001, 0.0001)
         Learning rates for training the target model. Each learning rate is
         used for the corresponding number of epochs above.
+    scale_learning_rates : bool, default True
+        Scale the target model learning rates above based on
+        (`batch_size / 256`). Mainly for convenience with large minibatch
+        training.
     momentum : float, default 0.9
         Momentum for SGD with the target model.
-    weight_decay : float, default 5e-4
+    weight_decay : float, default 1e-4
         Weight decay for SGD with the target model.
-    batch_size : int, default 128
+    batch_size : int, default 256
         Minibatch size for training the target model.
-    eval_batch_size : int, default 128
+    eval_batch_size : int, default 256
         Minibatch size for evaluation (validation and testing) of the target
         model.
-    proxy_arch : str, default 'preact20'
-        Model architecture for the proxy model. `preact20` is short for
-        ResNet20 w/ Pre-Activation.
+    fp16 : bool, default False
+        Use mixed precision training for the target model.
+    label_smoothing : float, default 0.1
+        Amount to smooth labels for loss of the target model.
+    loss_scale : float, default 256
+        Amount to scale loss for mixed precision training of the target model.
+    proxy_arch : str, default 'resnet18'
+        Model architecture for the proxy model. `resnet18` is short for
+        ResNet18. Other models are pulled from `torchvision.models`.
     proxy_optimizer : str, default = 'sgd'
         Optimizer for training the proxy model.
-    proxy_epochs : Tuple[int, ...], default (1, 90, 45, 45)
+    proxy_epochs : Tuple[int, ...], default (1, 1, 1, 1, 1, 25, 30, 20, 20)
         Epochs for training the proxy model. Each number corresponds to a
         learning rate below.
-    proxy_learning_rates : Tuple[float, ...], default (0.01, 0.1, 0.01, 0.001)
+    proxy_learning_rates : Tuple[float, ...], default (
+            0.0167, 0.0333, 0.05, 0.0667, 0.0833,  0.1, 0.01, 0.001, 0.0001)
         Learning rates for training the proxy model. Each learning rate is
         used for the corresponding number of epochs above.
+    proxy_scale_learning_rates : bool, default True
+        Scale the proxy model learning rates above based on
+        (`batch_size / 256`). Mainly for convenience with large minibatch
+        training.
     proxy_momentum : float, default 0.9
         Momentum for SGD with the proxy model.
-    proxy_weight_decay : float, default 5e-4
+    proxy_weight_decay : float, default 1e-4
         Weight decay for SGD with the proxy model.
-    proxy_batch_size : int, default 128
+    proxy_batch_size : int, default 256
         Minibatch size for training the proxy model.
-    proxy_eval_batch_size : int, default 128
-        Minibatch size for evaluation (validation and testing) of the model
-        proxy.
-    initial_subset : int, default 1,000
+    proxy_eval_batch_size : int, default 256
+        Minibatch size for evaluation (validation and testing) of the proxy
+        model.
+    proxy_fp16 : bool, default False
+        Use mixed precision training for the proxy model.
+    proxy_label_smoothing : float, default 0.1
+        Amount to smooth labels for loss of the proxy model.
+    proxy_loss_scale : float, default 256
+        Amount to scale loss for mixed precision training of the proxy model.
+    initial_subset : int, default 25,623
         Number of randomly selected training examples to use for the initial
         labeled set.
-    rounds : Tuple[int, ...], default (4,000, 5,000, 5,000, 5,000, 5,000)
+    rounds : Tuple[int, ...], default (
+            102,493, 128,117, 128,117, 128,117, 128,117)
         Number of unlabeled exampels to select in a round of labeling.
     selection_method : str, default least_confidence
         Criteria for selecting unlabeled examples to label.
@@ -156,6 +189,14 @@ def active(run_dir: str = './run',
     seed = utils.set_random_seed(seed)
     # Capture all of the arguments to save alongside the results.
     config = utils.capture_config(**locals())
+    if scale_learning_rates:
+        # For convenience, scale the learning rate for large-batch SGD
+        learning_rates = tuple(np.array(learning_rates) * (batch_size / 256))
+        config['scaled_learning_rates'] = learning_rates
+    if proxy_scale_learning_rates:
+        # For convenience, scale the learning rate for large-batch SGD
+        proxy_learning_rates = tuple(np.array(proxy_learning_rates) * (proxy_batch_size / 256))  # noqa: E501
+        config['proxy_scaled_learning_rates'] = proxy_learning_rates
     # Create a unique timestamped directory for this experiment.
     run_dir = utils.create_run_dir(run_dir, timestamp=config['timestamp'])
     utils.save_config(config, run_dir)
@@ -176,9 +217,9 @@ def active(run_dir: str = './run',
         test_dataset = create_dataset(dataset, datasets_dir, train=False,
                                       augmentation=False)
 
-    # Calculate the number of classes (e.g., 10 or 100) so the model has
+    # Calculate the number of classes (e.g., 1000) so the model has
     #   the right dimension for its output.
-    num_classes = len(set(train_dataset.targets))  # type: ignore
+    num_classes = 1_000  # type: ignore
 
     # Split the training dataset between training and validation.
     unlabeled_pool, dev_indices = utils.split_indices(
@@ -214,6 +255,8 @@ def active(run_dir: str = './run',
             eval_num_workers=eval_num_workers,
             indices=(unlabeled_pool, dev_indices))
 
+        # Create the loss criterion.
+        proxy_criterion = _LabelSmoothing(proxy_label_smoothing)
         # Create the proxy model generator (i.e., send data and get a
         #   trained model).
         proxy_generator = generate_models(
@@ -224,6 +267,9 @@ def active(run_dir: str = './run',
             device_ids=device_ids,
             dev_loader=proxy_dev_loader,
             test_loader=proxy_test_loader,
+            fp16=proxy_fp16,
+            loss_scale=proxy_loss_scale,
+            criterion=proxy_criterion,
             run_dir=proxy_run_dir,
             checkpoint=checkpoint)
         # Start the generator
@@ -264,6 +310,8 @@ def active(run_dir: str = './run',
                 eval_num_workers=eval_num_workers,
                 indices=(unlabeled_pool, dev_indices))
 
+            # Create the loss criterion.
+            target_criterion = _LabelSmoothing(label_smoothing)
             # Create the target model generator (i.e., send data and
             #   get a trained model).
             target_generator = generate_models(
@@ -274,6 +322,9 @@ def active(run_dir: str = './run',
                 device_ids=device_ids,
                 dev_loader=target_dev_loader,
                 test_loader=target_test_loader,
+                fp16=fp16,
+                loss_scale=loss_scale,
+                criterion=target_criterion,
                 run_dir=target_run_dir,
                 checkpoint=checkpoint)
             # Start the generator

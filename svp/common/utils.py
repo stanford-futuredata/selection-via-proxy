@@ -62,12 +62,12 @@ def capture_config(**kwargs) -> Dict[str, Any]:
 
     Parameters
     ----------
-    kwargs: dict
+    kwargs: Dict
         Arguments for the current experiment.
 
     Returns
     -------
-    config : dict
+    config : Dict
     """
     config = {k: v for k, v in kwargs.items()}
     config['timestamp'] = "{:.0f}".format(datetime.utcnow().timestamp())
@@ -78,7 +78,7 @@ def capture_config(**kwargs) -> Dict[str, Any]:
 
 def create_run_dir(run_dir: str, timestamp: Optional[str] = None) -> str:
     """
-    Create a timestamped directory for artifacts from the experiment.
+    Create a timestamped directory for artifacts from an experiment.
 
     Parameters
     ----------
@@ -108,8 +108,11 @@ def config_run_env(cuda: Optional[bool] = None,
     Parameters
     ----------
     cuda : bool or None, default None
+        Indicate whether to use cuda and GPUs.
     device_ids : tuple of int or None, default None
+        GPU IDs to use.
     num_workers : int or None, default None
+        Number of workers to use for data loading.
 
     Returns
     -------
@@ -137,27 +140,30 @@ def config_run_env(cuda: Optional[bool] = None,
     return use_cuda, device, _device_ids, num_workers
 
 
-def split_indices(dataset: Dataset, validation: int, run_dir: str,
-                  shuffle: bool = False
+def split_indices(dataset: Dataset, validation: int,
+                  run_dir: Optional[str] = None, shuffle: bool = False
                   ) -> Tuple[List[int], List[int]]:
     """
     Split indices between training and validation.
 
-
     Parameters
     ----------
     dataset: Dataset
+        Dataset to split between train and val.
     validation int
+        Number of examples to use for validattion.
     run_dir: str
+        Directory to save indices.
     shuffle: bool, default False
+        Indicate whether to shuffle data.
 
     Returns
     -------
     train_indices: List[Int]
-    valid_indices: List[Int]
+    dev_indices: List[Int]
     """
     num_train = len(dataset)
-    indices = list(range(num_train))
+    indices = np.arange(num_train, dtype=np.int64)
     assert num_train > validation and validation >= 0
     split = num_train - validation
 
@@ -165,18 +171,34 @@ def split_indices(dataset: Dataset, validation: int, run_dir: str,
         np.random.shuffle(indices)
 
     train_indices = indices[:split]
-    save_index(train_indices, run_dir, 'train.index')
+    if run_dir is not None:
+        save_index(train_indices, run_dir, 'train.index')
     num_train = len(train_indices)
-    valid_indices = indices[split:]
-    save_index(valid_indices, run_dir, 'valid.index')
-    num_valid = len(valid_indices)
+    dev_indices = indices[split:]
+    if run_dir is not None:
+        save_index(dev_indices, run_dir, 'dev.index')
+    num_dev = len(dev_indices)
 
     print(f'Using {num_train} examples for training pool')
-    print(f'Using {num_valid} examples for validation')
-    return train_indices, valid_indices
+    print(f'Using {num_dev} examples for validation')
+    return train_indices, dev_indices
 
 
-def correct(outputs, targets, top=(1, )):
+def correct(outputs: torch.Tensor, targets: torch.Tensor,
+            top: Tuple[int, ...] = (1, )) -> List[torch.Tensor]:
+    """
+    Calculate how many examples are correct for multiple top-k values
+
+    Parameters
+    ----------
+    outputs : torch.Tensor
+    target : torch.Tensor
+    top : Tuple[int], default (1, )
+
+    Returns
+    -------
+    tops : List[torch.Tensor]
+    """
     _, predictions = outputs.topk(max(top), dim=1, largest=True, sorted=True)
     targets = targets.view(-1, 1).expand_as(predictions)
 
@@ -187,11 +209,12 @@ def correct(outputs, targets, top=(1, )):
 
 class RecordInputs(nn.Module):
     def __init__(self, model, keep=None):
-        '''
-        Args
-        - model: nn.Module
-        - keep: list of str
-        '''
+        """
+        Parameters
+        ----------
+        model: nn.Module
+        keep: List[str]
+        """
         super().__init__()
         self.model = model
         self.kept = {}
@@ -204,13 +227,15 @@ class RecordInputs(nn.Module):
         assert len(self.kept) > 0
 
     def keep_inputs(self, module, name):
-        '''Changes the forward() method of the given module to update
+        """
+        Changes the forward() method of the given module to update
         self.kept[name].
 
-        Args
-        - module: nn.Module
-        - name: str
-        '''
+        Parameters
+        ----------
+        module : nn.Module
+        name : str
+        """
         func = module.forward
 
         def _forward(inputs, *args, **kwargs):
@@ -242,6 +267,19 @@ class AverageMeter(object):
 
 def save_result(result: Dict, path: Union[str, TextIO],
                 write_heading: bool = False):
+    """
+    Write partial result from iterative process to file.
+
+    Parameters
+    ----------
+    result : Dict
+        Partial result to save.
+    path : str or TextIO
+        Output to save result. If str, write_heading is ignored, and
+        the heading is written based on whether the file already exists.
+    write_heading : bool, default False
+        Indicate whether to write the CSV heading.
+    """
     if isinstance(path, str):
         write_heading = not os.path.exists(path)
         with open(path, mode='a') as out:
@@ -251,12 +289,18 @@ def save_result(result: Dict, path: Union[str, TextIO],
 
 
 def _save_result_helper(file, result, write_heading):
+    """
+    Refacored out from save_result to prevent repeated code.
+    """
     if write_heading:
         file.write(",".join([str(k) for k, v in result.items()]) + '\n')
     file.write(",".join([str(v) for k, v in result.items()]) + '\n')
 
 
 def save_config(config, run_dir):
+    """
+    Save timestamp
+    """
     path = os.path.join(run_dir, "config_{}.json".format(config['timestamp']))
     with open(path, 'w') as config_file:
         json.dump(config, config_file)

@@ -1,27 +1,32 @@
 import os
 from typing import Tuple, Optional
 
+import numpy as np
 from torch import cuda
 from torch import nn, optim
 from torch.optim import Optimizer  # type: ignore
 
 from svp.common import utils
-from svp.cifar.models import MODELS
-from svp.cifar.datasets import create_dataset
+from svp.imagenet.models import MODELS
+from svp.imagenet.datasets import create_dataset
 from svp.common.train import run_training, create_loaders
 
 
 def train(run_dir: str = './run',
 
-          datasets_dir: str = './data', dataset: str = 'cifar10',
+          datasets_dir: str = './data', dataset: str = 'imagenet',
           augmentation: bool = True,
           validation: int = 0, shuffle: bool = True,
 
-          arch: str = 'preact20', optimizer: str = 'sgd',
-          epochs: Tuple[int, ...] = (1, 90, 45, 45),
-          learning_rates: Tuple[float, ...] = (0.01, 0.1, 0.01, 0.001),
-          momentum: float = 0.9, weight_decay: float = 5e-4,
-          batch_size: int = 128, eval_batch_size: int = 128,
+          arch: str = 'resnet18', optimizer: str = 'sgd',
+          epochs: Tuple[int, ...] = (1, 1, 1, 1, 1, 25, 30, 20, 20),
+          learning_rates: Tuple[float, ...] = (
+              0.0167, 0.0333, 0.05, 0.0667, 0.0833,  0.1, 0.01, 0.001, 0.0001),
+          scale_learning_rates: bool = True,
+          momentum: float = 0.9, weight_decay: float = 1e-4,
+          batch_size: int = 256, eval_batch_size: int = 256,
+          fp16: bool = False, label_smoothing: float = 0.1,
+          loss_scale: float = 256.0,
 
           cuda: bool = True,
           device_ids: Tuple[int, ...] = tuple(range(cuda.device_count())),
@@ -30,7 +35,7 @@ def train(run_dir: str = './run',
           seed: Optional[int] = None, checkpoint: str = 'best',
           track_test_acc: bool = True):
     """
-    Train deep learning models (e.g., ResNet) on CIFAR10 and CIFAR100.
+    Train deep learning models (e.g., ResNet) on ImageNet.
 
     Parameters
     ----------
@@ -38,31 +43,42 @@ def train(run_dir: str = './run',
         Path to log results and other artifacts.
     datasets_dir : str, default './data'
         Path to datasets.
-    dataset : str, default 'cifar10'
-        Dataset to use in experiment (i.e., CIFAR10 or CIFAR100)
+    dataset : str, default 'imagenet'
+        Dataset to use in experiment (unnecessary but kept for consistency)
     augmentation : bool, default True
         Add data augmentation (i.e., random crop and horizontal flip).
     validation : int, default 0
         Number of examples from training set to use for valdiation.
     shuffle : bool, default True
         Shuffle training data before splitting into training and validation.
-    arch : str, default 'preact20'
-        Model architecture. `preact20` is short for ResNet20 w/ Pre-Activation.
+    arch : str, default 'resnet18'
+        Model architecture. `resnet18` is short for ResNet18. Other models are
+        pulled from `torchvision.models`.
     optimizer : str, default = 'sgd'
         Optimizer for training.
-    epochs : Tuple[int, ...], default (1, 90, 45, 45)
+    epochs : Tuple[int, ...], default (1, 1, 1, 1, 1, 25, 30, 20, 20)
         Epochs for training. Each number corresponds to a learning rate below.
-    learning_rates : Tuple[float, ...], default (0.01, 0.1, 0.01, 0.001)
+    learning_rates : Tuple[float, ...], default (
+            0.0167, 0.0333, 0.05, 0.0667, 0.0833,  0.1, 0.01, 0.001, 0.0001)
         Learning rates for training. Each learning rate is used for the
         corresponding number of epochs above.
+    scale_learning_rates : bool, default True
+        Scale learning rates above based on (`batch_size / 256`). Mainly for
+        convenience with large minibatch training.
     momentum : float, default 0.9
         Momentum for SGD.
-    weight_decay : float, default 5e-4
+    weight_decay : float, default 1e-4
         Weight decay for SGD.
-    batch_size : int, default 128
+    batch_size : int, default 256
         Minibatch size for training.
-    eval_batch_size : int, default 128
+    eval_batch_size : int, default 256
         Minibatch size for evaluation (validation and testing).
+    fp16 : bool, default False
+        Use mixed precision training.
+    label_smoothing : float, default 0.1
+        Amount to smooth labels for loss.
+    loss_scale : float, default 256
+        Amount to scale loss for mixed precision training.
     cuda : bool, default True
         Enable or disable use of available GPUs
     device_ids : Tuple[int, ...], default True
@@ -96,6 +112,10 @@ def train(run_dir: str = './run',
     seed = utils.set_random_seed(seed)
     # Capture all of the arguments to save alongside the results.
     config = utils.capture_config(**locals())
+    if scale_learning_rates:
+        # For convenience, scale the learning rate for large-batch SGD
+        learning_rates = tuple(np.array(learning_rates) * (batch_size / 256))
+        config['scaled_learning_rates'] = learning_rates
     # Create a unique timestamped directory for this experiment.
     run_dir = utils.create_run_dir(run_dir, timestamp=config['timestamp'])
     utils.save_config(config, run_dir)
@@ -125,9 +145,9 @@ def train(run_dir: str = './run',
         num_workers=num_workers,
         eval_num_workers=eval_num_workers)
 
-    # Calculate the number of classes (e.g., 10 or 100) so the model has
+    # Calculate the number of classes (e.g., 1000) so the model has
     #   the right dimension for its output.
-    num_classes = len(set(train_dataset.targets))  # type: ignore
+    num_classes = 1_000  # type: ignore
 
     # Create the model and optimizer for training.
     model, _optimizer = create_model_and_optimizer(
@@ -140,13 +160,18 @@ def train(run_dir: str = './run',
         weight_decay=weight_decay)
 
     # Create the loss criterion.
-    criterion = nn.CrossEntropyLoss()
+    criterion = _LabelSmoothing(label_smoothing)
 
     # Move the model and loss to the appropriate devices.
     model = model.to(device)
+    criterion = criterion.to(device)
+
+    if fp16:
+        from apex import amp  # avoid dependency unless necessary.
+        model, _optimizer = amp.initialize(model, _optimizer,
+                                           loss_scale=loss_scale)
     if use_cuda:
         model = nn.DataParallel(model, device_ids=device_ids)
-    criterion = criterion.to(device)
 
     # Run training.
     return run_training(
@@ -159,6 +184,7 @@ def train(run_dir: str = './run',
         learning_rates=learning_rates,
         dev_loader=dev_loader,
         test_loader=test_loader,
+        fp16=fp16,
         run_dir=run_dir,
         checkpoint=checkpoint)
 
@@ -170,7 +196,7 @@ def create_model_and_optimizer(arch: str, num_classes: int, optimizer: str,
                                run_dir: Optional[str] = None
                                ) -> Tuple[nn.Module, Optimizer]:
     '''
-    Create the model and optimizer for the CIFAR10 and CIFAR100 datasets.
+    Create the model and optimizer for ImageNet.
 
     Parameters
     ----------
@@ -218,3 +244,26 @@ def create_model_and_optimizer(arch: str, num_classes: int, optimizer: str,
         with open(os.path.join(run_dir, 'model.txt'), 'w') as file:
             file.write(str(model))
     return model, _optimizer
+
+
+class _LabelSmoothing(nn.Module):
+    """
+    NLL loss with label smoothing.
+    """
+    def __init__(self, smoothing=0.0):
+        """
+        Constructor for the LabelSmoothing module.
+        :param smoothing: label smoothing factor
+        """
+        super(_LabelSmoothing, self).__init__()
+        self.confidence = 1.0 - smoothing
+        self.smoothing = smoothing
+
+    def forward(self, x, target):
+        logprobs = nn.functional.log_softmax(x, dim=-1)
+
+        nll_loss = -logprobs.gather(dim=-1, index=target.unsqueeze(1))
+        nll_loss = nll_loss.squeeze(1)
+        smooth_loss = -logprobs.mean(dim=-1)
+        loss = self.confidence * nll_loss + self.smoothing * smooth_loss
+        return loss.mean()

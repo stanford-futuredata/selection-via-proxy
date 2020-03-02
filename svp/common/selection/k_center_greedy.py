@@ -1,6 +1,6 @@
 import numpy as np
 from tqdm import tqdm
-import scipy.spatial.distance
+import scipy.spatial.distance  # type: ignore
 
 
 def k_center_greedy(X, s, b):

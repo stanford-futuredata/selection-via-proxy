@@ -177,7 +177,7 @@ def proxy_training_overrides(func):
                    ' labeling.')
 @click.option('--selection-method', type=click.Choice(active_learning_methods),
               default='least_confidence', show_default=True,
-              help='Criteria for selecting unlabelled examples to label')
+              help='Criteria for selecting examples')
 @click.option('--precomputed-selection',
               help='Path to timestamp run_dir of precomputed indices')
 @click.option('--train-target/--no-train-target',

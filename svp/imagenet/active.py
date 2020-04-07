@@ -65,7 +65,7 @@ def active(run_dir: str = './run',
     If the model architectures (`arch` vs `proxy_arch`) or the learning rate
     schedules don't match, "selection via proxy" (SVP) is performed and two
     separate models are trained. The proxy is used for selecting which
-    examples to label, while the target is only used for evaluation the
+    examples to label, while the target is only used for evaluating the
     quality of the selection. By default, the target model (`arch`) is
     trained and evaluated after each selection round. To change this behavior
     set `eval_target_at` to evaluate at a specific labeling budget(s) or set

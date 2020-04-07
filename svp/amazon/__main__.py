@@ -13,6 +13,8 @@ from svp.amazon.datasets import DATASETS
 from svp.amazon.train import train as train_function
 from svp.amazon.active import active as active_function
 from svp.amazon.coreset import coreset as coreset_function
+from svp.amazon.fasttext import fasttext as fasttext_function
+from svp.amazon.fasttext import FASTTEXT_SELECTION_METHODS
 
 
 @click.group()
@@ -202,7 +204,7 @@ def active(run_dir: str,
               help='Number of examples to keep in the selected subset.')
 @click.option('--selection-method', type=click.Choice(coreset_methods),
               default='least_confidence', show_default=True,
-              help='Criteria for selecting unlabelled examples to label')
+              help='Criteria for selecting examples')
 @click.option('--precomputed-selection',
               help='Path to timestamp run_dir of precomputed indices')
 @click.option('--train-target/--no-train-target',
@@ -236,6 +238,63 @@ def coreset(run_dir: str,
 
             seed: int, checkpoint: str, track_test_acc: bool):
     coreset_function(**locals())
+
+
+@cli.command()
+@click.argument('executable')
+@click.option('--run-dir', default='./run', show_default=True,
+              help='Path to log results and other artifacts.')
+@click.option('--datasets-dir', default='./data', show_default=True,
+              help='Path to datasets.')
+@click.option('--dataset', '-d', type=click.Choice(DATASETS),
+              default='amazon_review_polarity', show_default=True,
+              help='Specify dataset to use in experiment.')
+@click.option('--dim', default=10, show_default=True,
+              help='Size of word vectors.')
+@click.option('--ngrams', '-n', default=2, show_default=True,
+              help='Max length of word ngram.')
+@click.option('--min-count', default=1, show_default=True,
+              help='Minimal number of word occurences.')
+@click.option('--bucket', default=10_000_000, show_default=True,
+              help='Number of buckets.')
+@click.option('--learning-rate', default=0.05, show_default=True,
+              help='Learning rate.')
+@click.option('--epochs', default=5, show_default=True,
+              help='Number of epochs to train.')
+@click.option('sizes', '--size', multiple=True, type=int,
+              default=(
+                72_000, 360_000, 720_000, 1_080_000, 1_440_000, 1_800_000
+              ),
+              show_default=True,
+              help=('Number of examples to keep after each selection round.'
+                    ' The first number represents the initial subset.'
+                    ' Increasing sizes represent the active learning use case.'
+                    ' Decreasing sizes represent the core-set selection use'
+                    ' case.'))
+@click.option('--selection-method',
+              type=click.Choice(FASTTEXT_SELECTION_METHODS),
+              default='entropy', show_default=True,
+              help='Criteria for selecting examples.')
+@click.option('--threads', default=4, show_default=True,
+              help='Number of threads.')
+@click.option('--seed', '-s', type=int,
+              help='Specify random seed.')
+@click.option('--track-test-acc/--no-track-test-acc',
+              default=True, show_default=True,
+              help='Calculate performance of the models on the test '
+                   ' data in addition or instead of the validation'
+                   ' dataset.')
+def fasttext(executable: str,
+
+             run_dir: str, datasets_dir: str, dataset: str,
+
+             dim: int, ngrams: int, min_count: int, bucket: int,
+             learning_rate: float, epochs: int,
+
+             sizes: Tuple[int, ...], selection_method: str,
+
+             threads: int, seed: Optional[int], track_test_acc: bool):
+    fasttext_function(**locals())
 
 
 if __name__ == '__main__':

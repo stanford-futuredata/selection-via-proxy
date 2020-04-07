@@ -202,7 +202,7 @@ def active(run_dir: str,
               help='Number of examples to keep in the selected subset.')
 @click.option('--selection-method', type=click.Choice(coreset_methods),
               default='least_confidence', show_default=True,
-              help='Criteria for selecting unlabelled examples to label')
+              help='Criteria for selecting examples')
 @click.option('--precomputed-selection',
               help='Path to timestamp run_dir of precomputed indices')
 @click.option('--train-target/--no-train-target',

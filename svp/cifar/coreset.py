@@ -101,7 +101,7 @@ def coreset(run_dir: str = './run',
     subset : int, default 10,000
         Number of examples to keep in the selected subset.
     selection_method : str, default least_confidence
-        Criteria for selecting unlabeled examples to label.
+        Criteria for selecting examples.
     precomputed_selection : str or None, default None
         Path to timestamped run_dir of precomputed indices.
     train_target : bool, default True

@@ -146,7 +146,7 @@ def symlink_target_to_proxy(run_dir: str):
 
     proxy_csv = os.path.join(run_dir, 'proxy.csv')
     target_csv = os.path.join(run_dir, 'target.csv')
-    os.symlink(os.path.relpath(proxy_dir, run_dir), target_csv)
+    os.symlink(os.path.relpath(proxy_csv, run_dir), target_csv)
     print(f'Linked {target_csv} to {proxy_csv}')
 
 

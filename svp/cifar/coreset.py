@@ -239,6 +239,7 @@ def coreset(run_dir: str = './run',
             assert subset > 1_000
             # TODO: Maybe this shouldn't be hardcoded
             current = np.random.permutation(train_indices)[:1_000]
+            subset = subset - len(current)
 
         nevents = None
         if selection_method == 'forgetting_events':
